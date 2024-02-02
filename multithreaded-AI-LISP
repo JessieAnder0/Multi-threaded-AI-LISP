@@ -1,0 +1,532 @@
+
+;;for my sanity
+(declaim #+sbcl(sb-ext:muffle-conditions style-warning))
+
+
+;;; Some utility Functions and Macros that you might find to be useful (hint)
+
+(defmacro while (test &rest body)
+  "Repeatedly executes body as long as test returns true.  Then returns nil."
+  `(loop while ,test do (progn ,@body)))
+
+;;; Example usage
+;;;
+;;; (let ((x 0))
+;;;    (while (< x 5)
+;;;        (print x)
+;;;        (incf x)))
+
+
+(defun random? (&optional (prob 0.5))
+  "Tosses a coin of prob probability of coming up heads,
+then returns t if it's heads, else nil."
+  (< (random 1.0) prob))
+
+(defun generate-list (num function &optional no-duplicates &rest args)
+  "Generates a list of size NUM, with each element created by
+  (apply FUNCTION ARGS).  If no-duplicates is t, then no duplicates
+are permitted (FUNCTION is repeatedly called until a unique
+new slot is created).  EQUALP is the default test used for duplicates. Args is a list that will be passed as the arguments for the apply function"
+  (let (bag)
+    (while (< (length bag) num)
+      (let ((candidate (apply function args)))
+	(unless (and no-duplicates
+		     (member candidate bag :test #'equalp))
+	  (push candidate bag))))
+    bag))
+
+;; hope this works right
+(defun gaussian-random (mean variance)
+  "Generates a random number under a gaussian distribution with the
+given mean and variance (using the Box-Muller-Marsaglia method)"
+  (let (x y (w 0))
+    (while (not (and (< 0 w) (< w 1)))
+	   (setf x (- (random 2.0) 1.0))
+	   (setf y (- (random 2.0) 1.0))
+	   (setf w (+ (* x x) (* y y))))
+    (+ mean (* x (sqrt variance) (sqrt (* -2 (/ (log w) w)))))))
+
+
+
+;;; HELPER FUNCTIONS
+
+
+(defun random-picker (s)
+  "Returns a random item from the sequence with replacement."
+  (elt s (random (length s))))
+
+
+
+(defun random-inc (a b)
+  "Same as the standard random function, but over the range of a to b inclusivly for both values."
+  (let ((d (abs(- b a)))
+	(r (random (* 2 (abs(- b a))))))
+    (while (> r d)
+      (setf r (random (* 2 d))))
+    (+ r a)))
+
+
+
+
+
+(defun index-of-max (list)
+  "Finds the index of the max value"
+  (let ((max-index 0))
+    (dotimes (i (length list))
+	  (if (> (elt list i) (elt list max-index))
+	      (setq max-index i)))
+    max-index))
+
+
+;;;;;; TOP-LEVEL EVOLUTIONARY COMPUTATION FUNCTIONS 
+
+
+;;; TOURNAMENT SELECTION
+
+;; is this a good setting?  Try tweaking it (any integer >= 2) and see
+(defparameter *tournament-size* 2)
+(defun tournament-select-one (population fitnesses)
+  "Does one tournament selection and returns the selected individual."
+
+  ;;; IMPLEMENT ME
+  ;;;
+  ;;; See Algorithm 32 of Essentials of Metaheuristics
+
+  (let ((best (random (length population))) (x 2))
+	(while (<= x *tournament-size*)
+	  (let ((next (random (length population))))
+	    (if (> (elt fitnesses next) (elt fitnesses best))
+		(setf best next))))
+	best))
+
+
+
+(defun tournament-selector (num population fitnesses)
+  "Does NUM tournament selections, and puts them all in a list, then returns the list"
+
+  ;;; IMPLEMENT ME
+  ;;;
+  ;;; Hint: This is a very short function.  Maybe one of the
+  ;;; Utility functions I provided might be of benefit here
+
+  (generate-list num #'tournament-select-one :args population fitnesses)
+)
+
+
+
+;; I'm nice and am providing this for you.  :-)
+(defun simple-printer (pop fitnesses generation best best-fitness)
+  "Determines the individual in pop with the best (highest) fitness, then
+prints that fitness and individual in a pleasing manner."
+  
+  (let (best-ind best-fit)
+    (mapcar #'(lambda (ind fit)
+		(when (or (not best-ind)
+			  (< best-fit fit))
+		  (setq best-ind ind)
+		  (setq best-fit fit)))
+	    pop fitnesses)
+    (format t "~%Best Individual of Generation ~a:...~%Fitness: ~a~%Individual: ~a~%Best individual so far: ~a~%Best fitness so far: ~a~%"
+	   generation best-fit best-ind best best-fitness)
+    fitnesses))
+
+
+
+(defun evolve (generations pop-size
+	       &key setup creator selector modifier evaluator printer)
+  "Evolves for some number of GENERATIONS, creating a population of size
+POP-SIZE, using various functions"
+
+  ;;; IMPLEMENT ME
+  ;;;
+  ;; The functions passed in are as follows:
+  ;;(SETUP)                     called at the beginning of evolution, to set up
+  ;;                            global variables as necessary
+  ;;(CREATOR)                   creates a random individual
+  ;;(SELECTOR num pop fitneses) given a population and a list of corresponding fitnesses,
+  ;;                            selects and returns NUM individuals as a list.
+  ;;                            An individual may appear more than once in the list.
+  ;;(MODIFIER ind1 ind2)        modifies individuals ind1 and ind2 by crossing them
+  ;;                            over and mutating them.  Returns the two children
+  ;;                            as a list: (child1 child2).  Nondestructive to
+  ;;                            ind1 and ind2.
+  ;;(PRINTER pop fitnesses)     prints the best individual in the population, plus
+  ;;                            its fitness, and any other interesting statistics
+  ;;                            you think interesting for that generation.
+  ;;(EVALUATOR individual)      evaluates an individual, and returns its fitness.
+  ;;Pop will be guaranteed to be a multiple of 2 in size.
+  ;;
+  ;; HIGHER FITNESSES ARE BETTER
+
+  ;; your function should call PRINTER each generation, and also print out or the
+  ;; best individual discovered over the whole run at the end, plus its fitness
+  ;; and any other statistics you think might be nifty.
+
+  ;;; HINTS: You could do this in many ways.  But I implemented it using
+  ;;; the following functions (among others)
+  ;;;
+  ;;; FUNCALL FORMAT MAPCAR LAMBDA APPLY
+
+  (let ((population (generate-list pop-size creator)) (best nil) (elites nil))
+    (dotimes (i generations)
+	  (let ((fitnesses (mapcar evaluator population)))
+	    (if (or (null best) (> (elt fitnesses (index-of-max fitnesses)) (funcall evaluator best)))
+		(setq best (elt population (index-of-max fitnesses))))
+	    (funcall printer population fitnesses (1+ i) best (funcall evaluator best))
+	    (setq elites (list best (elt population (index-of-max fitnesses)))))
+	  ;;above is the part that calculates the best fitness from the population
+	  ;;below is the part that mutates and crosses over the parents to form the children
+	  (let ((next-gen elites) (parent1) (parent2))	    
+	    (dotimes (j (/ (- pop-size 2) 2))
+		  (setq parent1 (random-picker population))
+		  (setq parent2 (random-picker population))
+		  (setq next-gen (append next-gen (funcall modifier parent1 parent2))))
+	    (setq population next-gen)))
+    (funcall printer (list best) (list (funcall evaluator best)) "FINAL" best (funcall evaluator best)) 
+    best))
+			
+
+
+;;;;;; FLOATING-POINT VECTOR GENETIC ALGORTITHM
+
+
+;;; Here you will implement creator, modifier, and setup functions for
+;;; individuals in the form of lists of floating-point values.  
+;;; I have provided some objective functions which you can use as
+;;; fitness evaluation functions.
+
+;;; If you were really into this, you might try implementing an evolution
+;;; strategy instead of a genetic algorithm and compare the two.
+;;;
+;;; If you were really REALLY into this, I have an extension of this
+;;; project which also does genetic programming as well.  That is a much
+;;; MUCH MUCH MUCH more difficult project.
+
+
+
+(defparameter *float-vector-length* 20 
+  "The length of the vector individuals")
+(defparameter *float-min* -5.12 
+  "The minimum legal value of a number in a vector") 
+(defparameter *float-max* 5.12 
+  "The maximum legal value of a number in a vector")
+
+(defun float-vector-creator ()
+  "Creates a floating-point-vector *float-vector-length* in size, filled with
+UNIFORM random numbers in the range appropriate to the given problem"
+
+  ;;; IMPLEMENT ME
+  ;;;
+  ;;; The numbers must be uniformly randomly chosen between *float-min* and
+  ;;; *float-max*.  See the documentation for the RANDOM function.
+
+  ;;; HINT: Maybe a function I provided in the utilities might
+  ;;; be handy here
+
+  (generate-list *float-vector-length* #'random-inc :args *float-min* *float-max*)
+)
+
+
+
+;; I just made up these numbers, you'll probably need to tweak them
+(defparameter *crossover-probability* 0.1
+  "Per-gene probability of crossover in uniform crossover")
+(defparameter *mutation-probability* 0.1
+  "Per-gene probability of mutation in gaussian convolution") 
+(defparameter *mutation-variance* 0.02
+  "Per-gene mutation variance in gaussian convolution")
+
+
+
+
+;; to impement FLOAT-VECTOR-MODIFIER, the following two functions are
+;; strongly reccommended.
+
+
+(defun uniform-crossover (ind1 ind2)
+  "Performs uniform crossover on the two individuals, modifying them in place.
+*crossover-probability* is the probability that any given allele will crossover.  
+The individuals are guaranteed to be the same length.  Returns NIL."
+
+  ;;; IMPLEMENT ME
+  ;;;
+  ;;; For crossover: use uniform crossover (Algorithm 25) in
+  ;;;                Essentials of Metaheuristics
+  ;;; HINTS:
+  ;;; DOTIMES, ELT, and ROTATEF
+
+  (mapcar (lambda (a b)
+	    (if (random? *crossover-probability*)
+		(let ((swap a))
+		  (setf a b)
+		  (setf b swap))))
+	  ind1 ind2))
+	
+
+
+
+(defun gaussian-convolution (ind)
+  "Performs gaussian convolution mutation on the individual, modifying it in place.
+ Returns NIL."
+
+  ;;; IMPLEMENT ME
+  ;;;
+  ;;; For mutation, see gaussian convolution (Algorithm 11) in
+  ;;;                Essentials of Metaheuristics
+  ;;; Keep in mind the legal minimum and maximum values for numbers.
+  ;;; HINTS:
+  ;;; Maybe a function or three in the utility functions above might be handy
+  ;;; See also SETF
+  (dotimes (i (length ind))
+	    (if (random? *mutation-probability*)
+		(let ((x (+ (elt ind i) (gaussian-random 0 *mutation-variance*))))
+		  ;;We add a gauss random number to the ith item in the ind vector then check if it is in the bounds
+		  (loop until
+			(and (typep x 'float) (>= x *float-min*) (<= x *float-max*)) do 
+			(setf x (+ (elt ind i) (gaussian-random 0 *mutation-variance*))))
+		  ;;repeats gauss rand until it is in the bound
+		  (setf (elt ind i) x)))))
+
+
+
+
+
+
+
+
+(defun float-vector-modifier (ind1 ind2)
+  "Copies and modifies ind1 and ind2 by crossing them over with a uniform crossover,
+then mutates the children.  *crossover-probability* is the probability that any
+given allele will crossover.  *mutation-probability* is the probability that any
+given allele in a child will mutate.  Mutation does gaussian convolution on the allele."
+
+    ;;; IMPLEMENT ME
+    ;;; It's pretty straightforward.
+    ;;; This function should first COPY the two individuals, then
+    ;;; CROSS THEM OVER, then mutate the result using gaussian covolution,
+    ;;; then return BOTH children together as a list (child1 child2)
+    ;;;
+    ;;; HINTS:
+    ;;; For copying lists:  See the Lisp Cheat Sheet 
+    ;;;                (http://cs.gmu.edu/~sean/lisp/LispCheatSheet.txt)
+
+  (let ((a (copy-list ind1)) (b (copy-list ind2)))
+    (uniform-crossover a b)
+    (gaussian-convolution a)
+    (gaussian-convolution b)
+    (list a b)))
+
+
+
+
+;; you probably don't need to implement anything here
+(defun float-vector-sum-setup ()
+  "Does nothing.  Perhaps you might use this function to set
+(ahem) various global variables which define the problem being evaluated
+and the floating-point ranges involved, etc.  I dunno."
+  )
+
+
+
+
+
+;;; FITNESS EVALUATION FUNCTIONS
+
+;;; I'm providing you with some classic objective functions.  See section 11.2.2 of
+;;; Essentials of Metaheuristics for details on these functions.
+;;;
+;;; Many of these functions (sphere, rosenbrock, rastrigin, schwefel) are
+;;; traditionally minimized rather than maximized.  We're assuming that higher
+;;; values are "fitter" in this class, so I have taken the liberty of converting
+;;; all the minimization funsumctions into maximization functions by negating their
+;;; outputs.  This means that you'll see a lot of negative values and that's fine;
+;;; just remember that higher is always better.
+;;; 
+;;; These functions also traditionally operate with different bounds on the
+;;; minimum and maximum values of the numbers in the individuals' vectors.  
+;;; Let's assume that for all of these functions, these values can legally
+;;; range from -5.12 to 5.12 inclusive.  One function (schwefel) normally goes from
+;;; about -511 to +512, so if you look at the code you can see I'm multiplying
+;;; the values by 100 to properly scale it so it now uses -5.12 to 5.12.
+
+
+(defun sum-f (ind)
+  "Performs the Sum objective function.  Assumes that ind is a list of floats"
+  (reduce #'+ ind))
+
+(defun step-f (ind)
+  "Performs the Step objective function.  Assumes that ind is a list of floats"
+  (+ (* 6 (length ind))
+     (reduce #'+ (mapcar #'floor ind))))
+
+(defun sphere-f (ind)
+  "Performs the Sphere objective function.  Assumes that ind is a list of floats"
+  (- (reduce #'+ (mapcar (lambda (x) (* x x)) ind))))
+
+(defun rosenbrock-f (ind)
+  "Performs the Rosenbrock objective function.  Assumes that ind is a list of floats"
+  (- (reduce #'+ (mapcar (lambda (x x1)
+			   (+ (* (- 1 x) (- 1 x))
+			      (* 100 (- x1 (* x x)) (- x1 (* x x)))))
+			 ind (rest ind)))))
+
+(defun rastrigin-f (ind)
+  "Performs the Rastrigin objective function.  Assumes that ind is a list of floats"
+  (- (+ (* 10 (length ind))
+	(reduce #'+ (mapcar (lambda (x) (- (* x x) (* 10 (cos (* 2 pi x)))))
+			    ind)))))
+
+(defun schwefel-f (ind)
+  "Performs the Schwefel objective function.  Assumes that ind is a list of floats"
+  (- (reduce #'+ (mapcar (lambda (x) (* (- x) (sin (sqrt (abs x)))))	
+			 (mapcar (lambda (x) (* x 100)) ind)))))
+
+
+
+
+;;; an example way to fire up the GA.  If you've got it tuned right, it should quickly
+;;; find individuals which are all very close to +5.12
+
+#|
+
+(evolve 1000 50
+ 	:setup #'float-vector-sum-setup
+	:creator #'float-vector-creator
+	:selector #'tournament-selector
+	:modifier #'float-vector-modifier
+        :evaluator #'sum-f
+	:printer #'simple-printer)
+|#
+
+
+;;This prints nothing, it is simply to avoid errors
+(defun no-print (&rest args)
+  nil)
+
+
+
+;;Used in the meta-evaluate funnction to reset the global variables after each evaluation.
+(defun meta-setup ()
+  
+  (setf *crossover-probability* 0.184)
+  
+  (setf *mutation-probability* 0.07)
+  
+  (setf *mutation-variance* 0.4)
+
+  (setf *float-vector-length* 3 )
+  
+  (setf *float-min* 0.0)
+  
+  (setf *float-max* 0.5)
+)
+
+
+;;Here the crossover-probability, mutation-probability, and mutation-variance are defined for the meta-evolve in that order
+(defun meta-inital-state ()
+  (let ((new-ind '(0.1 0.3 0.42)))
+    (gaussian-convolution new-ind)
+    new-ind))
+
+;;this is the same as float-vector-modifier. It is left here for possible fun wacky stuff in the future such as passing catagorical data into the meta-ga.
+(defun meta-float-vector-modifier (ind1 ind2)
+  (float-vector-modifier ind1 ind2))
+
+;;prints the relavent information for the meta-ga such as; generation, population, fitnesses of all the population, avarage fitness of the pop, and the best individual along with thier fitness
+(defun meta-printer (pop fitnesses generation best best-fitness)
+  (format t "~%###############################################~%GEN  ~a~%POP   ~a~%FIT   ~a~%AVG FIT    ~a~%BEST    ~a~%BEST FIT    ~a~%###############################################~%"
+	  generation  pop fitnesses (/ (sum-f fitnesses) (length fitnesses)) best best-fitness))
+
+
+;;The heart of the meta-ga alogorithom. It sets global variables, runs evolve sevral times as separate threads, then avarages the results to return it as the fitness.
+(defun meta-evaluate (ind)
+  
+  (setf *crossover-probability* (elt ind 0))
+  
+  (setf *mutation-probability* (elt ind 1))
+  
+  (setf *mutation-variance* (elt ind 2))
+
+  (setf *float-vector-length* 20)
+  
+  (setf *float-min* -5.12 )
+  
+  (setf *float-max* 5.12 )
+
+  (let ((results nil) (threads))
+    (dotimes (x 3)
+      (setf threads (append threads (list
+				     (sb-thread::make-thread #'evolve
+							     :arguments
+							     '(500 40
+ 						 :setup float-vector-sum-setup
+						 :creator float-vector-creator
+						 :selector tournament-selector
+						 :modifier float-vector-modifier
+						 :evaluator schwefel-f
+						 :printer no-print)
+							     :name (write-to-string x))))))
+    (setf results (mapcar #'sum-f (mapcar #'sb-thread::join-thread threads)))
+    
+    (meta-setup)
+    ;resets the global variables after each evauation
+    
+    (/ (sum-f results) (length results))))
+
+
+;calls the meta verions of the functions, which call the regular ga. 
+(evolve 250 40
+ 	    :setup #'meta-setup
+	    :creator #'meta-inital-state
+	    :selector #'tournament-selector
+	    :modifier #'meta-float-vector-modifier
+	    :evaluator #'meta-evaluate
+	    :printer #'meta-printer)
+
+
+#|
+(evolve 200 500
+ 	:setup #'float-vector-sum-setup
+	:creator #'float-vector-creator
+	:selector #'tournament-selector
+	:modifier #'float-vector-modifier
+        :evaluator #'sum-f
+	:printer #'simple-printer)
+|#
+
+
+					;;;;Comments
+;;;Implementaion details and notes:
+;;
+;;generate-list was modified to accept arguments, while still being backwards compatible
+;;The evolve function was based off algorithom 33 in the textbook. The eliets for the next generation are the best canidate found so far along with the best canidate of the population.
+;;The reasoning for this was to reduce implementaion complexity by avoiding sorting. This will have a explorative effect on the GA. In further implementations this will need to be updated.
+;;meta-evaluate is multithreaded, you will need sbcl and I hope it works on your machine.
+;;
+;;;Variables:
+;;
+;;evolve: pop 40, generations 500
+;;meta-evolve: pop 40, generations 250 (anything longer made me cry from how slow it was, and that was after multithreading)
+;;tournament-size: 2
+;; crossover-probability, mutation-probability, and mutation-variance for the meta-ga where derived by experimentation
+;;
+;;;Methodology:
+;;
+;;After creating the base ga, the goal was to find the best crossover-probability, mutation-probability, and mutation-variance for it.
+;;The meta-ga was vary good at finding these variables for simpler base-ga evaluation functions, such as sum-f.
+;;IE, with each generation, the avarage fitness/rate at which the base-ga hill climbed was increasing.
+;;Then with this proof of concept functioning, the next goal was to find good global values for the meta-ga.
+;;With some reaserch it was found that the search space for this type of problom was smooth and lacked in local optima.
+;;For this I used the input of the base-ga in the final generation of the meta-ga. Remember the input for the base-ga is a list containing crossover-probability, mutation-probability, and mutation-variance.
+;;This best result was the values 0.184, 0.07, 0.4 (truncated of course) which can now be found in meta-setup.
+;;Now all that is left is to test this this monstrosity with a more difficult evaluation function for the base-ga
+;;but oops I am out of time and this meta-ga is SLOW!! Even with the multithreading.
+;;From the very short tests that where ran using more complicated evaluation functions, it seems to be struggling with creating better and better perameters for the base-ga
+;;
+;;;Conclution:
+;;I had so much fun with this, very few projects engaged me enough for me to go this far out of the scope of the original requierments.
+;;As for the ga itself, the fact that it is struggling with more challenging evaluation functions such as schwefel-f leaves me concerned.
+;;I suspect that this may be caused by:
+;;a)A problem with the code (which should always be a consideration)
+;;b)sub-optimal/slow, this can be fixed with MORE THREADS!!
+;;c)In the most unlikly outcome, it may be that the structure of the problem makes it more challenging for the meta-ga to locate good parameters. This is the most interesting outcome.
